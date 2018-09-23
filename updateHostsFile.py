@@ -82,10 +82,7 @@ def get_defaults():
         "exclusions": [],
         "commonexclusions": ["hulu.com"],
         "blacklistfile": path_join_robust(BASEDIR_PATH, "blacklist"),
-        "whitelistfile": path_join_robust(BASEDIR_PATH, "whitelist"),
-    }
-
-
+        "whitelistfile": path_join_robust(BASEDIR_PATH, "whitelist")}
 # End Project Settings
 
 
@@ -231,21 +228,20 @@ def main():
     settings["extensionsources"] = list_dir_no_hidden(extensions_path)
 
     # All our extensions folders...
-    settings["extensions"] = [
-        os.path.basename(item) for item in list_dir_no_hidden(extensions_path)
-    ]
+    settings["extensions"] = [os.path.basename(item) for item in list_dir_no_hidden(extensions_path)]
     # ... intersected with the extensions passed-in as arguments, then sorted.
-    settings["extensions"] = sorted(
-        list(set(options["extensions"]).intersection(settings["extensions"]))
-    )
+    settings["extensions"] = sorted(list(
+        set(options["extensions"]).intersection(settings["extensions"])))
 
     auto = settings["auto"]
+    host_filename = settings["hostfilename"]
     exclusion_regexes = settings["exclusionregexs"]
     source_data_filename = settings["sourcedatafilename"]
 
-    update_sources = prompt_for_update(freshen=settings["freshen"], update_auto=auto)
+    update_sources = prompt_for_update(freshen=settings["freshen"],
+                                       update_auto=auto)
     if update_sources:
-        update_all_sources(source_data_filename, settings["hostfilename"])
+        update_all_sources(source_data_filename, host_filename)
 
     gather_exclusions = prompt_for_exclusions(skip_prompt=auto)
 
@@ -255,46 +251,55 @@ def main():
         exclusion_regexes = display_exclusion_options(
             common_exclusions=common_exclusions,
             exclusion_pattern=exclusion_pattern,
-            exclusion_regexes=exclusion_regexes,
-        )
+            exclusion_regexes=exclusion_regexes)
 
     extensions = settings["extensions"]
-    sources_data = update_sources_data(
-        settings["sourcesdata"],
-        datapath=data_path,
-        extensions=extensions,
-        extensionspath=extensions_path,
-        sourcedatafilename=source_data_filename,
-    )
+    sources_data = update_sources_data(settings["sourcesdata"],
+                                       datapath=data_path,
+                                       extensions=extensions,
+                                       extensionspath=extensions_path,
+                                       sourcedatafilename=source_data_filename)
 
-    merge_file = create_initial_file()
-    remove_old_hosts_file(
-        path_join_robust(settings["outputpath"], "hosts"), settings["backup"]
-    )
-    if settings["compress"]:
-        final_file = open(path_join_robust(settings["outputpath"], "hosts"), "w+b")
-        compressed_file = tempfile.NamedTemporaryFile()
-        remove_dups_and_excl(merge_file, exclusion_regexes, compressed_file)
-        compress_file(compressed_file, settings["targetip"], final_file)
-    elif settings["minimise"]:
-        final_file = open(path_join_robust(settings["outputpath"], "hosts"), "w+b")
-        minimised_file = tempfile.NamedTemporaryFile()
-        remove_dups_and_excl(merge_file, exclusion_regexes, minimised_file)
-        minimise_file(minimised_file, settings["targetip"], final_file)
-    else:
-        final_file = remove_dups_and_excl(merge_file, exclusion_regexes)
+    merge_file = create_initial_file(datapath=data_path, extensions=extensions,
+                                     blacklistfile=settings["blacklistfile"],
+                                     extensionspath=extensions_path,
+                                     hostfilename=host_filename)
+    remove_old_hosts_file(settings["backup"])
 
+    target_tip = settings["targetip"]
+    output_path = settings["outputpath"]
     number_of_rules = settings["numberofrules"]
+    remove_kwargs = dict(outputpath=output_path,
+                         numberofrules=number_of_rules,
+                         targetip=settings["targetip"],
+                         exclusions=settings["exclusions"],
+                         whitelistfile=settings["whitelistfile"],
+                         keepdomaincomments=settings["keepdomaincomments"])
+
+    if settings["compress"]:
+        final_file = open(path_join_robust(output_path, "hosts"), "w+b")
+        compressed_file = tempfile.NamedTemporaryFile()
+        remove_kwargs["output_file"] = compressed_file
+
+        remove_dups_and_excl(merge_file, exclusion_regexes, **remove_kwargs)
+        compress_file(compressed_file, target_tip, final_file)
+    elif settings["minimise"]:
+        final_file = open(path_join_robust(output_path, "hosts"), "w+b")
+        minimised_file = tempfile.NamedTemporaryFile()
+
+        remove_dups_and_excl(merge_file, exclusion_regexes, minimised_file)
+        minimise_file(minimised_file, target_tip, final_file)
+    else:
+        number_of_rules, final_file = remove_dups_and_excl(
+            merge_file, exclusion_regexes, **remove_kwargs)
+
     output_subfolder = settings["outputsubfolder"]
     skip_static_hosts = settings["skipstatichosts"]
 
-    write_opening_header(
-        final_file,
-        extensions=extensions,
-        numberofrules=number_of_rules,
-        outputsubfolder=output_subfolder,
-        skipstatichosts=skip_static_hosts,
-    )
+    write_opening_header(final_file, extensions=extensions,
+                         numberofrules=number_of_rules,
+                         outputsubfolder=output_subfolder,
+                         skipstatichosts=skip_static_hosts)
     final_file.close()
 
     if not settings["nogendata"]:
@@ -306,27 +311,20 @@ def main():
             sourcesdata=sources_data,
         )
 
-    print_success(
-        "Success! The hosts file has been saved in folder "
-        + output_subfolder
-        + "\nIt contains "
-        + "{:,}".format(number_of_rules)
-        + " unique entries."
-    )
+    print_success("Success! The hosts file has been saved in folder " +
+                  output_subfolder + "\nIt contains " +
+                  "{:,}".format(number_of_rules) +
+                  " unique entries.")
 
-    move_file = prompt_for_move(
-        final_file,
-        auto=auto,
-        replace=settings["replace"],
-        skipstatichosts=skip_static_hosts,
-    )
+    move_file = prompt_for_move(final_file, auto=auto,
+                                replace=settings["replace"],
+                                skipstatichosts=skip_static_hosts)
 
     # We only flush the DNS cache if we have
     # moved a new hosts file into place.
     if move_file:
-        prompt_for_flush_dns_cache(
-            flush_cache=settings["flushdnscache"], prompt_flush=not auto
-        )
+        prompt_for_flush_dns_cache(flush_cache=settings["flushdnscache"],
+                                   prompt_flush=not auto)
 
 
 # Prompt the User
@@ -361,9 +359,7 @@ def prompt_for_update(freshen, update_auto):
             # Starting in Python 3.3, IOError is aliased
             # OSError. However, we have to catch both for
             # Python 2.x failures.
-            print_failure(
-                "ERROR: No 'hosts' file in the folder. Try creating one manually."
-            )
+            print_failure("ERROR: No 'hosts' file in the folder. Try creating one manually.")
 
     if not freshen:
         return
@@ -395,11 +391,9 @@ def prompt_for_exclusions(skip_prompt):
         custom domains beyond those in the whitelist.
     """
 
-    prompt = (
-        "Do you want to exclude any domains?\n"
-        "For example, hulu.com video streaming must be able to access "
-        "its tracking and ad servers in order to play video."
-    )
+    prompt = ("Do you want to exclude any domains?\n"
+              "For example, hulu.com video streaming must be able to access "
+              "its tracking and ad servers in order to play video.")
 
     if not skip_prompt:
         if query_yes_no(prompt):
@@ -467,8 +461,6 @@ def prompt_for_move(final_file, **move_params):
         move_hosts_file_into_place(final_file)
 
     return move_file
-
-
 # End Prompt the User
 
 
@@ -530,16 +522,15 @@ def display_exclusion_options(common_exclusions, exclusion_pattern, exclusion_re
         prompt = "Do you want to exclude the domain " + exclusion_option + " ?"
 
         if query_yes_no(prompt):
-            exclusion_regexes = exclude_domain(
-                exclusion_option, exclusion_pattern, exclusion_regexes
-            )
+            exclusion_regexes = exclude_domain(exclusion_option,
+                                               exclusion_pattern,
+                                               exclusion_regexes)
         else:
             continue
 
     if query_yes_no("Do you want to exclude any other domains?"):
-        exclusion_regexes = gather_custom_exclusions(
-            exclusion_pattern, exclusion_regexes
-        )
+        exclusion_regexes = gather_custom_exclusions(exclusion_pattern,
+                                                     exclusion_regexes)
 
     return exclusion_regexes
 
@@ -569,9 +560,7 @@ def gather_custom_exclusions(exclusion_pattern, exclusion_regexes):
         user_domain = input(domain_prompt)
 
         if is_valid_domain_format(user_domain):
-            exclusion_regexes = exclude_domain(
-                user_domain, exclusion_pattern, exclusion_regexes
-            )
+            exclusion_regexes = exclude_domain(user_domain, exclusion_pattern, exclusion_regexes)
 
         continue_prompt = "Do you have more domains you want to enter?"
         if not query_yes_no(continue_prompt):
@@ -636,8 +625,6 @@ def matches_exclusions(stripped_rule, exclusion_regexes):
             return True
 
     return False
-
-
 # End Exclusion Logic
 
 
@@ -723,7 +710,9 @@ def update_all_sources(source_data_filename, host_filename):
     """
 
     # The transforms we support
-    transform_methods = {"jsonarray": jsonarray}
+    transform_methods = {
+        'jsonarray': jsonarray
+    }
 
     all_sources = sort_sources(recursive_glob("*", source_data_filename))
 
@@ -748,53 +737,73 @@ def update_all_sources(source_data_filename, host_filename):
             # get rid of carriage-return symbols
             updated_file = updated_file.replace("\r", "")
 
-            hosts_file = open(
-                path_join_robust(BASEDIR_PATH, os.path.dirname(source), host_filename),
-                "wb",
-            )
+            hosts_file = open(path_join_robust(BASEDIR_PATH,
+                                               os.path.dirname(source),
+                                               host_filename), "wb")
             write_data(hosts_file, updated_file)
             hosts_file.close()
+
+        # There are many exceptions that could be raised here,
+        # such as data I/O errors, file reading / writing errors,
+        # and even locale errors when constructing paths.
         except Exception:
             print("Error in updating source: ", update_url)
-
-
 # End Update Logic
 
 
 # File Logic
-def create_initial_file():
+def create_initial_file(**create_params):
     """
     Initialize the file in which we merge all host files for later pruning.
+
+    Parameters
+    ----------
+    create_params : kwargs
+        Dictionary providing additional parameters for creating this
+        initial file. Currently, those parameters are:
+
+        1) datapath
+        2) extensions
+        3) hostfilename
+        4) blacklistfile
+        5) extensionspath
     """
 
+    data_path = create_params["datapath"]
+    host_filename = create_params["hostfilename"]
+
+    extensions = create_params["extensions"]
+    extensions_path = create_params["extensionspath"]
+
+    blacklist_file = create_params["blacklistfile"]
     merge_file = tempfile.NamedTemporaryFile()
 
     # spin the sources for the base file
     for source in sort_sources(
-        recursive_glob(settings["datapath"], settings["hostfilename"])
+        recursive_glob(data_path, host_filename)
     ):
-
-        start = "# Start {}\n\n".format(os.path.basename(os.path.dirname(source)))
-        end = "\n# End {}\n\n".format(os.path.basename(os.path.dirname(source)))
+        base_name = os.path.basename(os.path.dirname(source))
+        start = "# Start {}\n\n".format(base_name)
+        end = "\n# End {}\n\n".format(base_name)
 
         with open(source, "r", encoding="UTF-8") as curFile:
             write_data(merge_file, start + curFile.read() + end)
 
     # spin the sources for extensions to the base file
-    for source in settings["extensions"]:
+    for source in extensions:
         for filename in sort_sources(
             recursive_glob(
-                path_join_robust(settings["extensionspath"], source),
-                settings["hostfilename"],
+                path_join_robust(extensions_path, source),
+                host_filename,
             )
         ):
             with open(filename, "r") as curFile:
                 write_data(merge_file, curFile.read())
 
-    maybe_copy_example_file(settings["blacklistfile"])
+    maybe_copy_example_file(blacklist_file)
 
-    if os.path.isfile(settings["blacklistfile"]):
-        with open(settings["blacklistfile"], "r") as curFile:
+    if os.path.isfile(blacklist_file):
+        with open(blacklist_file, "r") as curFile:
             write_data(merge_file, curFile.read())
 
     return merge_file
@@ -818,7 +827,7 @@ def compress_file(input_file, target_ip, output_file):
     """
 
     input_file.seek(0)  # reset file pointer
-    write_data(output_file, "\n")
+    write_data(output_file, '\n')
 
     target_ip_len = len(target_ip)
     lines = [target_ip]
@@ -827,13 +836,12 @@ def compress_file(input_file, target_ip, output_file):
         line = line.decode("UTF-8")
 
         if line.startswith(target_ip):
-            if lines[lines_index].count(" ") < 9:
-                lines[lines_index] += (
-                    " " + line[target_ip_len : line.find("#")].strip()  # noqa: E203
-                )
+            if lines[lines_index].count(' ') < 9:
+                lines[lines_index] += ' ' \
+                    + line[target_ip_len:line.find('#')].strip()
             else:
-                lines[lines_index] += "\n"
-                lines.append(line[: line.find("#")].strip())
+                lines[lines_index] += '\n'
+                lines.append(line[:line.find('#')].strip())
                 lines_index += 1
 
     for line in lines:
@@ -858,14 +866,14 @@ def minimise_file(input_file, target_ip, output_file):
     """
 
     input_file.seek(0)  # reset file pointer
-    write_data(output_file, "\n")
+    write_data(output_file, '\n')
 
     lines = []
     for line in input_file.readlines():
         line = line.decode("UTF-8")
 
         if line.startswith(target_ip):
-            lines.append(line[: line.find("#")].strip() + "\n")
+            lines.append(line[:line.find('#')].strip() + '\n')
 
     for line in lines:
         write_data(output_file, line)
@@ -873,7 +881,8 @@ def minimise_file(input_file, target_ip, output_file):
     input_file.close()
 
 
-def remove_dups_and_excl(merge_file, exclusion_regexes, output_file=None):
+def remove_dups_and_excl(merge_file, exclusion_regexes,
+                         output_file=None, **remove_params):
     """
     Remove duplicates and remove hosts that we are excluding.
 
@@ -889,62 +898,80 @@ def remove_dups_and_excl(merge_file, exclusion_regexes, output_file=None):
     output_file : file
         The file object in which the result is written. If None, the file
         'settings["outputpath"]' will be created.
+    remove_params : kwargs
+        Dictionary providing additional parameters for removing duplicates
+        and removing excluded hosts. Currently, those fields are:
+
+        1) numberofrules
+        2) whitelistfile
+        3) exclusions
+        4) outputpath
+        5) targetip
+        6) keepdomaincomments
+
+    Returns
+    -------
+    A length-2 tuple containing the number of rules for exclusion
+    and the original merging file.
     """
 
-    number_of_rules = settings["numberofrules"]
-    maybe_copy_example_file(settings["whitelistfile"])
+    number_of_rules = remove_params["numberofrules"]
+    white_list_file = remove_params["whitelistfile"]
 
-    if os.path.isfile(settings["whitelistfile"]):
-        with open(settings["whitelistfile"], "r") as ins:
+    output_path = remove_params["outputpath"]
+    exclusions = remove_params["exclusions"]
+
+    maybe_copy_example_file(white_list_file)
+
+    if os.path.isfile(white_list_file):
+        with open(white_list_file, "r") as ins:
             for line in ins:
                 line = line.strip(" \t\n\r")
                 if line and not line.startswith("#"):
-                    settings["exclusions"].append(line)
+                    exclusions.append(line)
 
-    if not os.path.exists(settings["outputpath"]):
-        os.makedirs(settings["outputpath"])
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
 
     if output_file is None:
-        final_file = open(path_join_robust(settings["outputpath"], "hosts"), "w+b")
+        final_file = open(path_join_robust(output_path, "hosts"), "w+b")
     else:
         final_file = output_file
 
     merge_file.seek(0)  # reset file pointer
     hostnames = {"localhost", "localhost.localdomain", "local", "broadcasthost"}
-    exclusions = settings["exclusions"]
 
     for line in merge_file.readlines():
         write_line = True
 
-        # Explicit encoding
+        # Explicit encoding.
         line = line.decode("UTF-8")
 
-        # replace tabs with space
+        # Replace tabs with space.
         line = line.replace("\t+", " ")
 
         # see gh-271: trim trailing whitespace, periods
-        line = line.rstrip(" .")
+        line = line.rstrip(' .')
 
-        # Testing the first character doesn't require startswith
-        if line[0] == "#" or re.match(r"^\s*$", line[0]):
+        # Testing the first character doesn't require startswith.
+        if line[0] == "#" or re.match(r'^\s*$', line[0]):
             write_data(final_file, line)
             continue
         if "::1" in line:
             continue
 
-        stripped_rule = strip_rule(line)  # strip comments
-        if not stripped_rule or matches_exclusions(stripped_rule, exclusion_regexes):
+        stripped_rule = strip_rule(line)  # Strip comments.
+        if not stripped_rule or matches_exclusions(stripped_rule,
+                                                   exclusion_regexes):
             continue
 
-        # Normalize rule
+        # Normalize rule.
         hostname, normalized_rule = normalize_rule(
-            stripped_rule,
-            target_ip=settings["targetip"],
-            keep_domain_comments=settings["keepdomaincomments"],
-        )
+            stripped_rule, target_ip=remove_params["targetip"],
+            keep_domain_comments=remove_params["keepdomaincomments"])
 
         for exclude in exclusions:
-            if re.search(r"[\s\.]" + re.escape(exclude) + r"\s", line):
+            if re.search(r'[\s\.]' + re.escape(exclude) + r'\s', line):
                 write_line = False
                 break
 
@@ -953,11 +980,8 @@ def remove_dups_and_excl(merge_file, exclusion_regexes, output_file=None):
             hostnames.add(hostname)
             number_of_rules += 1
 
-    settings["numberofrules"] = number_of_rules
     merge_file.close()
-
-    if output_file is None:
-        return final_file
+    return number_of_rules, final_file
 
 
 def normalize_rule(rule, target_ip, keep_domain_comments):
@@ -984,7 +1008,7 @@ def normalize_rule(rule, target_ip, keep_domain_comments):
     """
     first try: IP followed by domain
     """
-    regex = r"^\s*(\d{1,3}\.){3}\d{1,3}\s+([\w\.-]+[a-zA-Z])(.*)"
+    regex = r'^\s*(\d{1,3}\.){3}\d{1,3}\s+([\w\.-]+[a-zA-Z])(.*)'
     result = re.search(regex, rule)
 
     if result:
@@ -995,7 +1019,7 @@ def normalize_rule(rule, target_ip, keep_domain_comments):
         rule = "%s %s" % (target_ip, hostname)
 
         if suffix and keep_domain_comments:
-            if not suffix.strip().startswith("#"):
+            if not suffix.strip().startswith('#'):
                 rule += " #%s" % suffix
             else:
                 rule += " %s" % suffix
@@ -1005,7 +1029,7 @@ def normalize_rule(rule, target_ip, keep_domain_comments):
     """
     next try: IP address followed by host IP address
     """
-    regex = r"^\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s*(.*)"
+    regex = r'^\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s*(.*)'
     result = re.search(regex, rule)
 
     if result:
@@ -1015,7 +1039,7 @@ def normalize_rule(rule, target_ip, keep_domain_comments):
         rule = "%s %s" % (target_ip, ip_host)
 
         if suffix and keep_domain_comments:
-            if not suffix.strip().startswith("#"):
+            if not suffix.strip().startswith('#'):
                 rule += " #%s" % suffix
             else:
                 rule += " %s" % suffix
@@ -1106,12 +1130,8 @@ def write_opening_header(final_file, **header_params):
     )
 
     if header_params["extensions"]:
-        write_data(
-            final_file,
-            "# Extensions added to this file: "
-            + ", ".join(header_params["extensions"])
-            + "\n",
-        )
+        write_data(final_file, "# Extensions added to this file: " + ", ".join(
+            header_params["extensions"]) + "\n")
 
     write_data(
         final_file,
@@ -1198,11 +1218,9 @@ def update_readme_data(readme_file, **readme_updates):
         extensions_key = "-".join(extensions)
 
     output_folder = readme_updates["outputsubfolder"]
-    generation_data = {
-        "location": path_join_robust(output_folder, ""),
-        "entries": readme_updates["numberofrules"],
-        "sourcesdata": readme_updates["sourcesdata"],
-    }
+    generation_data = {"location": path_join_robust(output_folder, ""),
+                       "entries": readme_updates["numberofrules"],
+                       "sourcesdata": readme_updates["sourcesdata"]}
 
     with open(readme_file, "r") as f:
         readme_data = json.load(f)
@@ -1237,16 +1255,15 @@ def move_hosts_file_into_place(final_file):
     filename = os.path.abspath(final_file.name)
 
     if os.name == "posix":
-        print(
-            "Moving the file requires administrative privileges. You might need to enter your password."
-        )
+        print("Moving the file requires administrative privileges. You might need to enter your password.")
         if subprocess.call(SUDO + ["cp", filename, "/etc/hosts"]):
             print_failure("Moving the file failed.")
     elif os.name == "nt":
-        print("Automatically moving the hosts file in place is not yet supported.")
-        print(
-            "Please move the generated file to %SystemRoot%\\system32\\drivers\\etc\\hosts"
-        )
+        print("Moving the file requires administrative "
+              "privileges in command prompt.")
+        if subprocess.call(["cmd", "/C", "copy", filename,
+                            r"C:\Windows\system32\drivers\etc\hosts"]):
+            print_failure("Moving the file failed.")
 
 
 def flush_dns_cache():
@@ -1255,9 +1272,7 @@ def flush_dns_cache():
     """
 
     print("Flushing the DNS cache to utilize new hosts file...")
-    print(
-        "Flushing the DNS cache requires administrative privileges. You might need to enter your password."
-    )
+    print("Flushing the DNS cache requires administrative privileges. You might need to enter your password.")
 
     dns_cache_found = False
 
@@ -1265,11 +1280,8 @@ def flush_dns_cache():
         if subprocess.call(SUDO + ["killall", "-HUP", "mDNSResponder"]):
             print_failure("Flushing the DNS cache failed.")
     elif os.name == "nt":
-        print("Automatically flushing the DNS cache is not yet supported.")
-        print(
-            "Please copy and paste the command 'ipconfig /flushdns' in "
-            "administrator command prompt after running this script."
-        )
+        if subprocess.call(["cmd", "/C", "ipconfig", "/flushdns"]):
+            print_failure("Flushing the DNS cache failed.")
     else:
         nscd_prefixes = ["/etc", "/etc/rc.d"]
         nscd_msg = "Flushing the DNS cache by restarting nscd {result}"
@@ -1308,9 +1320,7 @@ def flush_dns_cache():
                     continue
 
                 service_file = path_join_robust(system_dir, service)
-                service_msg = (
-                    "Flushing the DNS cache by restarting " + service + " {result}"
-                )
+                service_msg = ("Flushing the DNS cache by restarting " + service + " {result}")
 
                 if os.path.isfile(service_file):
                     if 0 != subprocess.call([systemctl, "status", service],
@@ -1367,8 +1377,6 @@ def remove_old_hosts_file(old_file_path, backup):
 
     # Create new empty hosts file
     open(old_file_path, "a").close()
-
-
 # End File Logic
 
 
@@ -1401,9 +1409,9 @@ def domain_to_idna(line):
         - The following also split the trailing comment of a given line.
     """
 
-    if not line.startswith("#"):
-        tabs = "\t"
-        space = " "
+    if not line.startswith('#'):
+        tabs = '\t'
+        space = ' '
 
         tabs_position, space_position = (line.find(tabs), line.find(space))
 
@@ -1417,7 +1425,7 @@ def domain_to_idna(line):
         elif not space_position == -1:
             separator = space
         else:
-            separator = ""
+            separator = ''
 
         if separator:
             splited_line = line.split(separator)
@@ -1429,21 +1437,20 @@ def domain_to_idna(line):
                         break
                     index += 1
 
-                if "#" in splited_line[index]:
-                    index_comment = splited_line[index].find("#")
+                if '#' in splited_line[index]:
+                    index_comment = splited_line[index].find('#')
 
                     if index_comment > -1:
                         comment = splited_line[index][index_comment:]
 
-                        splited_line[index] = (
-                            splited_line[index]
-                            .split(comment)[0]
-                            .encode("IDNA")
-                            .decode("UTF-8")
-                            + comment
-                        )
+                        splited_line[index] = splited_line[index] \
+                            .split(comment)[0] \
+                            .encode("IDNA").decode("UTF-8") + \
+                            comment
 
-                splited_line[index] = splited_line[index].encode("IDNA").decode("UTF-8")
+                splited_line[index] = splited_line[index] \
+                    .encode("IDNA") \
+                    .decode("UTF-8")
             except IndexError:
                 pass
             return separator.join(splited_line)
@@ -1554,8 +1561,11 @@ def query_yes_no(question, default="yes"):
     yes : Whether or not the user replied yes to the question.
     """
 
-    valid = {"yes": "yes", "y": "yes", "ye": "yes", "no": "no", "n": "no"}
-    prompt = {None: " [y/n] ", "yes": " [Y/n] ", "no": " [y/N] "}.get(default, None)
+    valid = {"yes": "yes", "y": "yes", "ye": "yes",
+             "no": "no", "n": "no"}
+    prompt = {None: " [y/n] ",
+              "yes": " [Y/n] ",
+              "no": " [y/N] "}.get(default, None)
 
     if not prompt:
         raise ValueError("invalid default answer: '%s'" % default)
@@ -1600,10 +1610,8 @@ def is_valid_domain_format(domain):
     domain_regex = re.compile(r"www\d{0,3}[.]|https?")
 
     if domain_regex.match(domain):
-        print(
-            "The domain " + domain + " is not valid. Do not include "
-            "www.domain.com or http(s)://domain.com. Try again."
-        )
+        print("The domain " + domain + " is not valid. Do not include "
+              "www.domain.com or http(s)://domain.com. Try again.")
         return False
     else:
         return True
@@ -1667,9 +1675,7 @@ def path_join_robust(path, *paths):
 
         return os.path.join(path, *paths)
     except UnicodeDecodeError as e:
-        raise locale.Error(
-            "Unable to construct path. This is likely a LOCALE issue:\n\n" + str(e)
-        )
+        raise locale.Error("Unable to construct path. This is likely a LOCALE issue:\n\n" + str(e))
 
 
 # Colors
@@ -1695,9 +1701,7 @@ def supports_color():
     """
 
     sys_platform = sys.platform
-    supported = sys_platform != "Pocket PC" and (
-        sys_platform != "win32" or "ANSICON" in os.environ
-    )
+    supported = sys_platform != "Pocket PC" and (sys_platform != "win32" or "ANSICON" in os.environ)
 
     atty_connected = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
     return supported and atty_connected
@@ -1756,8 +1760,6 @@ def print_failure(text):
     """
 
     print(colorize(text, Colors.FAIL))
-
-
 # End Helper Functions
 
 

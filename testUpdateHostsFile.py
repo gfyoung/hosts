@@ -23,6 +23,7 @@ import updateHostsFile
 from updateHostsFile import (
     Colors,
     colorize,
+    create_initial_file,
     display_exclusion_options,
     domain_to_idna,
     exclude_domain,
@@ -43,6 +44,7 @@ from updateHostsFile import (
     prompt_for_update,
     query_yes_no,
     recursive_glob,
+    remove_dups_and_excl,
     remove_old_hosts_file,
     sort_sources,
     strip_rule,
@@ -802,6 +804,249 @@ class TestUpdateAllSources(BaseStdout):
 
 
 # File Logic
+class MockReader(object):
+    """
+    Simple mock reader object.
+    """
+
+    def __init__(self, data):
+        """
+        Initialize a MockReader instance.
+        Parameters
+        ----------
+        data : str
+            The data that will be read from the reader.
+        """
+
+        self.data = data
+
+    def __enter__(self):
+        return self
+
+    def read(self):
+        """
+        Read the data from the MockReader.
+        Returns
+        -------
+        data : str
+            The data initialized with the MockReader instance.
+        """
+
+        return self.data
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+
+class TestCreateInitialFile(Base):
+
+    def setUp(self):
+        Base.setUp(self)
+
+        self.data_path = "data"
+        self.host_filename = "hosts"
+        self.blacklist_file = "blacklist"
+        self.extensions_path = "extensions"
+
+        self.create_kwargs = dict(datapath=self.data_path,
+                                  hostfilename=self.host_filename,
+                                  blacklistfile=self.blacklist_file,
+                                  extensionspath=self.extensions_path)
+
+    def create_initial_file(self, extensions):
+        return create_initial_file(extensions=extensions, **self.create_kwargs)
+
+    def check_output(self, buffer, expected):
+        # Reset so that we can read
+        # all of the file contents.
+        buffer.seek(0)
+        actual = buffer.read().decode("UTF-8")
+
+        # Clean up the buffer before we do the
+        # comparison of the contents.
+        buffer.close()
+        self.assertEqual(actual, expected)
+
+    @mock.patch("updateHostsFile.recursive_glob", return_value=[])
+    @mock.patch("os.path.isfile", return_value=False)
+    @mock.patch("builtins.open", return_value=0)
+    def test_no_write(self, mock_open, *_):
+        extensions = []
+
+        initial_file = self.create_initial_file(extensions)
+        self.check_output(initial_file, "")
+        mock_open.assert_not_called()
+
+        extensions = [".json", ".txt"]
+
+        initial_file = self.create_initial_file(extensions)
+        self.check_output(initial_file, "")
+        mock_open.assert_not_called()
+
+    @mock.patch("builtins.open",
+                return_value=MockReader("datafile\n"))
+    @mock.patch("updateHostsFile.recursive_glob",
+                return_value=["source1.txt", "source2.txt"])
+    @mock.patch("os.path.isfile", return_value=False)
+    def test_data_write(self, *_):
+        extensions = []
+
+        initial_file = self.create_initial_file(extensions)
+        self.check_output(initial_file, "# Start \n\ndatafile\n\n# End \n\n"
+                                        "# Start \n\ndatafile\n\n# End \n\n")
+
+    @mock.patch("builtins.open",
+                return_value=MockReader("ext_file\n"))
+    @mock.patch("updateHostsFile.recursive_glob",
+                side_effect=[[], ["source1.txt", "source2.txt"],
+                             ["source3.txt", "source4.txt"]])
+    @mock.patch("os.path.isfile", return_value=False)
+    def test_extension_write(self, *_):
+        extensions = [".txt", ".json"]
+
+        initial_file = self.create_initial_file(extensions)
+        self.check_output(initial_file, "ext_file\next_file\n"
+                                        "ext_file\next_file\n")
+
+    @mock.patch("builtins.open", return_value=MockReader("blacklist"))
+    @mock.patch("updateHostsFile.recursive_glob", return_value=[])
+    @mock.patch("os.path.isfile", return_value=True)
+    def test_blacklist_write(self, *_):
+        extensions = []
+
+        initial_file = self.create_initial_file(extensions)
+        self.check_output(initial_file, "blacklist")
+
+        extensions = [".json", ".txt"]
+
+        initial_file = self.create_initial_file(extensions)
+        self.check_output(initial_file, "blacklist")
+
+    @mock.patch("builtins.open",
+                side_effect=[MockReader("datafile\n"),
+                             MockReader("datafile\n"),
+                             MockReader("ext_file\n"),
+                             MockReader("ext_file\n"),
+                             MockReader("blacklist")])
+    @mock.patch("updateHostsFile.recursive_glob",
+                side_effect=[["source1.txt", "source2.txt"],
+                             ["source3.txt", "source4.txt"], []])
+    @mock.patch("os.path.isfile", return_value=True)
+    def test_mixture_write(self, *_):
+        extensions = [".txt", ".json"]
+
+        initial_file = self.create_initial_file(extensions)
+        self.check_output(initial_file, "# Start \n\ndatafile\n\n# End \n\n"
+                                        "# Start \n\ndatafile\n\n# End \n\n"
+                                        "ext_file\next_file\n"
+                                        "blacklist")
+
+
+class TestRemoveDupsAndExcl(BaseStdout):
+
+    def setUp(self):
+        BaseStdout.setUp(self)
+
+        self.number_of_rules = 5
+        self.target_ip = "127.0.0.1"
+        self.output_path = "output_dir"
+        self.keep_domain_comments = True
+        self.white_list_file = "whitelist"
+        self.exclusions = ["foo", "bar", "baz"]
+
+        self.remove_kwargs = dict(numberofrules=self.number_of_rules,
+                                  whitelistfile=self.white_list_file,
+                                  exclusions=self.exclusions,
+                                  outputpath=self.output_path,
+                                  targetip=self.target_ip,
+                                  keepdomaincomments=self.keep_domain_comments)
+
+    def remove_dups_and_excl(self, merge_file, exclusion_regexes):
+        return remove_dups_and_excl(merge_file, exclusion_regexes,
+                                    **self.remove_kwargs)
+
+    @staticmethod
+    def create_merge_file(*data):
+        data = [dt.encode("UTF-8") for dt in data]
+
+        merge_file = mock.Mock()
+        merge_file.close = lambda: None
+        merge_file.seek = lambda x: None
+        merge_file.readlines = lambda: data
+
+        return merge_file
+
+    @staticmethod
+    def create_exclusion_regexes(*exclusions):
+        return [re.compile(exclusion) for exclusion in exclusions]
+
+    @mock.patch("builtins.open", return_value=mock.Mock())
+    @mock.patch("os.path.exists", return_value=True)
+    @mock.patch("os.path.isfile", return_value=False)
+    @mock.patch("os.makedirs", return_value=None)
+    def test_no_action(self, make_dirs, *_):
+        merge_file = self.create_merge_file()
+        exclusion_regexes = self.create_exclusion_regexes()
+
+        number_of_rules, _ = self.remove_dups_and_excl(merge_file,
+                                                       exclusion_regexes)
+        make_dirs.assert_not_called()
+        self.assertEqual(number_of_rules, self.number_of_rules)
+
+    @mock.patch("builtins.open", return_value=mock.Mock())
+    @mock.patch("os.path.exists", return_value=False)
+    @mock.patch("os.path.isfile", return_value=False)
+    @mock.patch("os.makedirs", return_value=None)
+    def test_make_dirs(self, make_dirs, *_):
+        merge_file = self.create_merge_file()
+        exclusion_regexes = self.create_exclusion_regexes()
+
+        number_of_rules, _ = self.remove_dups_and_excl(merge_file,
+                                                       exclusion_regexes)
+        self.assert_called_once(make_dirs)
+        self.assertEqual(number_of_rules, self.number_of_rules)
+
+    @mock.patch("builtins.open", return_value=mock.Mock())
+    @mock.patch("os.path.exists", return_value=True)
+    @mock.patch("os.path.isfile", return_value=False)
+    def test_readlines_no_valid(self, *_):
+        for data in ["aaa.com", "bbb.org", "123456 cc.com",
+                     "124.124132.12.1", "ddd.gov"]:
+            merge_file = self.create_merge_file(data)
+            exclusion_regexes = self.create_exclusion_regexes()
+
+            number_of_rules, _ = self.remove_dups_and_excl(merge_file,
+                                                           exclusion_regexes)
+            self.assertEqual(number_of_rules, self.number_of_rules, data)
+
+    @mock.patch("builtins.open", return_value=mock.Mock())
+    @mock.patch("os.path.exists", return_value=True)
+    @mock.patch("os.path.isfile", return_value=False)
+    def test_readlines_valid(self, *_):
+        for data in ["12.215.252.1 aaa.com", "124.122.21.4 bbb.org",
+                     "123.456.12.1 cc.com", "453.677.261.6 ddd.gov"]:
+            merge_file = self.create_merge_file(data)
+            exclusion_regexes = self.create_exclusion_regexes()
+
+            number_of_rules, _ = self.remove_dups_and_excl(merge_file,
+                                                           exclusion_regexes)
+            self.assertEqual(number_of_rules, self.number_of_rules + 1, data)
+
+    @mock.patch("builtins.open", return_value=mock.Mock())
+    @mock.patch("os.path.exists", return_value=True)
+    @mock.patch("os.path.isfile", return_value=False)
+    def test_readlines_invalid_regex(self, *_):
+        for data in ["12.215.252.1 aaa.com", "124.122.21.4 bbb.org",
+                     "123.456.12.1 cc.com", "453.677.261.6 baz"]:
+            merge_file = self.create_merge_file(data)
+            exclusion_regexes = self.create_exclusion_regexes(
+                "a*", "b*", "c*")
+
+            number_of_rules, _ = self.remove_dups_and_excl(merge_file,
+                                                           exclusion_regexes)
+            self.assertEqual(number_of_rules, self.number_of_rules, data)
+
+
 class TestNormalizeRule(BaseStdout):
     def test_no_match(self):
         kwargs = dict(target_ip="0.0.0.0", keep_domain_comments=False)
@@ -1198,19 +1443,29 @@ class TestMoveHostsFile(BaseStdout):
             self.assertEqual(output, expected)
 
     @mock.patch("os.path.abspath", side_effect=lambda f: f)
-    def test_move_hosts_windows(self, _):
+    @mock.patch("subprocess.call", return_value=0)
+    def test_move_hosts_windows(self, *_):
         with self.mock_property("os.name"):
             os.name = "nt"
 
             mock_file = mock.Mock(name="foo")
             move_hosts_file_into_place(mock_file)
 
-            expected = (
-                "Automatically moving the hosts "
-                "file in place is not yet supported.\n"
-                "Please move the generated file to "
-                r"%SystemRoot%\system32\drivers\etc\hosts"
-            )
+            expected = ("Moving the file requires administrative "
+                        "privileges in command prompt.")
+            output = sys.stdout.getvalue()
+            self.assertIn(expected, output)
+
+    @mock.patch("os.path.abspath", side_effect=lambda f: f)
+    @mock.patch("subprocess.call", return_value=1)
+    def test_move_hosts_windows_fail(self, *_):
+        with self.mock_property("os.name"):
+            os.name = "nt"
+
+            mock_file = mock.Mock(name="foo")
+            move_hosts_file_into_place(mock_file)
+
+            expected = "Moving the file failed."
             output = sys.stdout.getvalue()
             self.assertIn(expected, output)
 
@@ -1270,21 +1525,33 @@ class TestFlushDnsCache(BaseStdout):
             output = sys.stdout.getvalue()
             self.assertIn(expected, output)
 
-    def test_flush_windows(self):
+    @mock.patch("subprocess.call", return_value=0)
+    def test_flush_windows(self, _):
         with self.mock_property("platform.system") as obj:
-            obj.return_value = "win32"
+            obj.return_value = "Windows"
 
             with self.mock_property("os.name"):
                 os.name = "nt"
                 flush_dns_cache()
 
-                expected = (
-                    "Automatically flushing the DNS cache is "
-                    "not yet supported.\nPlease copy and paste "
-                    "the command 'ipconfig /flushdns' in "
-                    "administrator command prompt after running "
-                    "this script."
-                )
+                expected = ("Flushing the DNS cache to utilize new hosts "
+                            "file...\nFlushing the DNS cache requires "
+                            "administrative privileges. You might need to "
+                            "enter your password.")
+                output = sys.stdout.getvalue()
+                self.assertIn(expected, output)
+
+    @mock.patch("subprocess.call", return_value=1)
+    def test_flush_windows_fail(self, _):
+        with self.mock_property("platform.system") as obj:
+            obj.return_value = "Windows"
+            flush_dns_cache()
+
+            with self.mock_property("os.name"):
+                os.name = "nt"
+                flush_dns_cache()
+
+                expected = "Flushing the DNS cache failed."
                 output = sys.stdout.getvalue()
                 self.assertIn(expected, output)
 
